@@ -18,7 +18,7 @@
 #include "handle_server.h"
 #include "facetmotorcontrol.h"
 
-const char* ssid = "dp_v1";
+const char* ssid = "A U T O - D P 2";
 const char* password = "";
 
 WebServer server(80);
@@ -680,7 +680,7 @@ void loop() {
         }
         sendDataPrevMillis = millis();
         digitalWrite(dirPin3, HIGH);
-        for (int x = 0; x < 4; x++) {
+        for (int x = 0; x < 2; x++) {
           digitalWrite(stepPin3, HIGH);
           delayMicroseconds(liftdwnmicro);
           dyeinterruptcheck();
