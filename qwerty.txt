@@ -1,0 +1,1378 @@
+/*
+  Currently in Testing-updated version of v2_app_v7 -
+  custom liftmotor
+
+
+*/
+#include<WiFi.h>
+#include <ArduinoJson.h>
+#include <Arduino.h>
+#include <analogWrite.h>
+#include <AccelStepper.h>
+
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <WebServer.h>
+#include <ESPmDNS.h>
+
+#include "handle_server.h"
+#include "facetmotorcontrol.h"
+
+const char* ssid = "A U T O - D P 2";
+const char* password = "";
+
+WebServer server(80);
+
+
+//OUTPUTS
+//const int stepPin = 13;//fecet 350 6400(fullstep_fullresolution)
+//const int dirPin = 12;
+
+const int stepPin2 = 33;//grain 5000 1200(fullstep_fullresolution) 38400,70-80(32 Microstep)
+const int dirPin2 = 32;
+
+const int stepPin3 = 2;//lift-off 1000
+const int dirPin3 = 15;
+
+
+const int stepPin4 = 23;//weight 3000 1200(fullstep_fullresolution) 38400,50(32 Microstep)
+const int dirPin4 = 22;
+
+const int d4cmotor3 = 5;
+const int d4cmotor4 = 18;
+
+//AccelStepper stepper(1, stepPin, dirPin); //facet 60000  3650000
+AccelStepper stepper2(1, stepPin2, dirPin2); //grain 7500 5550000
+//AccelStepper stepper3(1, stepPin3, dirPin3); //lift 35000 165000 (20 - 500)
+//AccelStepper stepper4(1, stepPin4, dirPin4); //weight 7500 5550000
+//int sspm = 60000;
+int ssp2m = 7500;
+int ssp3m = 35000;
+//int ssp4m = 7500;
+
+
+/////////////////////// internet variables//////////////////////
+//int ssp = 45000;
+int ssp2 = 7500;
+int ssp3 = 25000;
+//int ssp4 = 7500;
+
+int dcms = 45;
+int grninterval = 4000;
+int grninc = 1000;
+int facettimmer = 300000;
+int am_mode = 3;
+int facetset = 0; //FOR 16/8 Facet selection 0-16r(1), 1-16r(2), 2-8r(1), 3-8r(2)
+int start_stop = 0;
+
+/////////////////////////////lift motor variables
+int liftdwnmicro = 1000;
+int liftfirstdwn = 200;
+int liftupm = 50;
+int liftupmin = 20;
+String totaldwntrk = "";
+int bbv = 0;
+int cfstdwn = 0; // counter for first down
+String cfstdwns = "";//ANALITICS counter for first down
+String bbvs = "";//ANALITICS counter for bbv(liftdown track
+
+const int failed = 4;
+
+//INPUTS
+int liftin = 19;
+int weightmeg = 21;
+int grainmeg = 16;
+int dyein = 17;
+int vasindwn = 26;
+int vasinup = 25;
+int carbondisk = 27;
+
+//int facet = 16;
+
+int pcon = 2;
+
+int thehandle = 60000;//500(4small) - 1000(4 small) - 2000(5 small 16 facet normal ok) - 50000 for bhala ok
+int handle_ser = 0;
+
+unsigned long sendDataPrevMillis = 0;
+unsigned long changefacettimmer = 0;
+int lsp = 4000;
+int bbvthres = 40; //threshold after which start adding time for grain interval
+
+
+int temp1 = 0; //Grain current position
+int facetwas = 0; // for facet wass direction
+int ongoingfacet = 0;//facet current position
+int fgrn = 0;//USED FOR BRINGING GRAIN BACK TO 1 WHEN NO LOW IS DECTED ON GRAIN 4
+//int stopcmd=0;
+
+String fnotc = "";//ANALITICS FACET NOT CUTTED
+
+int ccg = 0; // For 360 grain counter if no grain found at fiest 360
+int facgrn[16];//Used for storing cutting grain for specific facet
+int fsensegrn[16];//Used for storing sense grain for specific facet(analitics)
+int facetmissed = 0; //Facet grain without dyesence counter
+int facetmiss[16];//for spcific facet stroage
+
+
+void handleInterrupt1();
+int fdone = 0;
+
+int temp22 = 4050;//3800-5,4000-5,4200-3,4100(2 rounds - 3 small)
+
+void setup() {
+
+  Serial.begin(115200);
+  Serial.println();
+  Serial.println();
+  Serial.println();
+  Serial.print("Initializing...");
+  Serial.print("My MAC address is: ");
+  Serial.println(WiFi.macAddress());
+
+
+  pinMode(stepPin, OUTPUT);
+  pinMode(dirPin, OUTPUT);
+  pinMode(stepPin2, OUTPUT);
+  pinMode(dirPin2, OUTPUT);
+  pinMode(stepPin3, OUTPUT);
+  pinMode(dirPin3, OUTPUT);
+  pinMode(stepPin4, OUTPUT);
+  pinMode(dirPin4, OUTPUT);
+  pinMode(d4cmotor3 , OUTPUT);
+  pinMode(d4cmotor4 , OUTPUT);
+  pinMode(failed , OUTPUT);
+  digitalWrite(failed, HIGH);
+  //  stepper.setMaxSpeed(sspm);
+  stepper2.setMaxSpeed(ssp2m);
+  //  stepper3.setMaxSpeed(ssp3m);
+  //  stepper4.setMaxSpeed(ssp4m);
+
+  //  stepper4.setSpeed(-ssp4);
+  //  stepper3.setSpeed(ssp3);
+  stepper2.setSpeed(ssp2);
+  //  stepper.setSpeed(ssp);
+  analogWrite(d4cmotor4, LOW);
+
+  pinMode(liftin, INPUT_PULLUP);
+  pinMode(weightmeg, INPUT_PULLUP);
+  pinMode(grainmeg, INPUT_PULLUP);
+  pinMode(dyein, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(dyein), handleInterrupt1, CHANGE);
+  pinMode(vasinup, INPUT_PULLUP); //25
+  pinMode(vasindwn, INPUT); //26
+  pinMode(carbondisk, INPUT_PULLUP); //26
+
+  handleserverlinks();
+
+
+  Serial.println("");
+  Serial.println("-------------------------------------");
+  Serial.println("Configuring access point...");
+  WiFi.softAP(ssid);
+  IPAddress myIP = WiFi.softAPIP();
+  Serial.print("AP IP address: ");
+  Serial.println(myIP);
+  server.begin();
+  Serial.println("Server started");
+  Serial.println("-------------------------------------");
+
+  //seting weight calibration
+  Serial.println("------------------------------------------");
+  Serial.println("");
+  Serial.println("setting weight");
+  Serial.println("");
+
+
+
+  //weight to zero
+  setweightto(500);
+  Serial.println("Weight set to 500");
+  //setweightto(int wei)
+  analogWrite(d4cmotor3, 0);
+  setgrainto(1, 0);
+  Serial.println("");
+  Serial.println("------------- IN MANUAL MODE -------------");
+  Serial.println("");
+  Serial.println("     ------ Set facet to start ------");
+  //initialising facet - grain combo to zero
+  for (int i = 0; i < 16; i = i + 1) {
+    facgrn[i] = 0;
+    facetmiss[i] = 0;
+    fsensegrn[i] = 0;
+  }
+}
+
+
+void IRAM_ATTR handleInterrupt1() {
+  if (facetset == 1 || facetset == 3) {
+    if (digitalRead(dyein) == LOW) {
+      fdone = 1;
+    }
+  }
+}
+
+void checkcarbondisk() {
+  if (digitalRead(carbondisk) == LOW) {
+    am_mode = 3;
+    pcon = 2;
+    liftupmotor("cd");
+    analogWrite(d4cmotor3, 0);
+    setgrainto(1, 0);
+
+    for (int x = 0; x < 5 ; x++) {
+      digitalWrite(failed, LOW);
+      delay(400);
+      digitalWrite(failed, HIGH);
+      delay(400);
+    }
+    Serial.println("------------------------------------------");
+    Serial.println("");
+    Serial.println("  --------- Machine Stopped  ----------  ");
+    Serial.println("");
+    Serial.println("  ---- No Carbon Disk Connected  ----  ");
+    Serial.println("");
+    Serial.println("------------------------------------------");
+  }
+}
+
+
+void checkwassplug() {
+  if ((digitalRead(vasindwn) == LOW && digitalRead(vasinup) == HIGH) && pcon != 4) {
+    am_mode = 3;
+    pcon = 2;
+    liftupmotor("wcp");
+    analogWrite(d4cmotor3, 0);
+    setgrainto(1, 0);
+
+    for (int x = 0; x < 5 ; x++) {
+      digitalWrite(failed, LOW);
+      delay(400);
+      digitalWrite(failed, HIGH);
+      delay(400);
+    }
+    Serial.println("------------------------------------------");
+    Serial.println("");
+    Serial.println("  --------- Machine Stopped  ----------  ");
+    Serial.println("");
+    Serial.println("  ----- kindly plug wass cover  -----  ");
+    Serial.println("");
+    Serial.println("------------------------------------------");
+  }
+}
+
+void loop() {
+  //  checkcarbondisk();
+  //  checkwassplug();
+
+
+  if (am_mode == 1 || am_mode == 0) {
+
+    handle_ser++;
+    if (handle_ser > thehandle) {
+      server.handleClient();
+      handle_ser = 0;
+    }
+    if (am_mode == 3) {
+      return;
+    }
+
+
+    ///Facet change
+    if (pcon == 1) {
+      //      Serial.println("------------------------------------------");
+      //      Serial.println("");
+      //      Serial.print("Fecet at - ");
+      //      Serial.println((ongoingfacet));
+      //      ccg = 0;
+      //      grninterval = 4000;
+      grninterval = 3000;
+
+      if (am_mode == 0) {                   //Pause if manual
+        am_mode = 3;
+        //        liftupmotor("pcon=1");
+        analogWrite(d4cmotor3, 0);
+        setgrainto(1, 0);
+
+        return;
+      } else {
+        pcon = 2;
+      }
+
+
+
+      if (facetset == 0) {
+        //        setfacetto(ongoingfacet + 1, 0);
+        facetmotor(22.5, 11.25);
+        ongoingfacet++;
+        if (ongoingfacet > 16) {
+                    if (facetmissed > 0) {
+                      facetset = 2;
+                      pcon = 1;
+                    } else {
+
+          am_mode = 3;
+          //            liftupmotor("16 Facet Completed"); //cfstdwns , facgrn
+          analogWrite(d4cmotor3, 0);
+          setgrainto(1, 0);
+          setfacetto(1, 0);
+          ongoingfacet = 1;
+          pcon = 8; //process finished
+          printanalitics();
+          Serial.println("------------------------------------------");
+          Serial.println("");
+          Serial.println("  --------- 16 Facet Completed ----------  ");
+          Serial.println("");
+          Serial.print("FACET LEFT TO CUT - ");
+          Serial.print(fnotc);
+          Serial.println("");
+          Serial.println("------------------------------------------");
+                    }
+        }
+      } if (facetset == 1) { // for 8 facet
+        facetmotor(45, 11.25);
+        ongoingfacet++;
+        if (ongoingfacet > 8) {
+                    if (facetmissed > 0) {
+                      facetset = 3;
+                      pcon = 1;
+                    } else {
+          am_mode = 3;
+          //            liftupmotor("8 Facet Completed");
+          analogWrite(d4cmotor3, 0);
+          setgrainto(1, 0);
+          setfacetto(1, 0);
+          ongoingfacet = 1;
+          pcon = 8; //process finished
+          printanalitics();
+          Serial.println("------------------------------------------");
+          Serial.println("");
+          Serial.println("  --------- 8 Facet Completed ----------  ");
+          Serial.println("");
+          Serial.print("FACET LEFT TO CUT - ");
+          Serial.print(fnotc);
+          Serial.println("");
+          Serial.println("------------------------------------------");
+                    }
+        }
+      } if (facetset == 2) { //for left out 16 facet
+        if (facetmissed > 0) {
+          Serial.print("Going to uncut facet- ");
+          Serial.print(facetmiss[facetmissed]);
+          Serial.println("");
+          setfacetto(facetmiss[facetmissed], 0);
+          facetmissed--;
+          pcon = 2;
+        } else {
+          am_mode = 3;
+          //          liftupmotor("16 Facet Completed");
+          analogWrite(d4cmotor3, 0);
+
+          setgrainto(1, 0);
+          setfacetto(1, 0);
+          ongoingfacet = 1;
+          pcon = 8; //process finished
+          printanalitics();
+          Serial.println("------------------------------------------");
+          Serial.println("");
+          Serial.println("  --------- 16 Facet Completed ----------  ");
+          Serial.println("");
+        }
+      } if (facetset == 3) { //for left out 8 facet
+        if (facetmissed > 0) {
+          Serial.print("Going to uncut bhala- ");
+          Serial.print(facetmiss[facetmissed]);
+          Serial.println("");
+          setfacetto(facetmiss[facetmissed], 0);
+          facetmissed--;
+          pcon = 2;
+        } else {
+          am_mode = 3;
+          //          liftupmotor("8 Facet Completed");
+          analogWrite(d4cmotor3, 0);
+
+          setgrainto(1, 0);
+          setfacetto(1, 0);
+          ongoingfacet = 1;
+          pcon = 8; //process finished
+          printanalitics();
+          Serial.println("------------------------------------------");
+          Serial.println("");
+          Serial.println("  --------- 8 Facet Completed ----------  ");
+          Serial.println("");
+        }
+      }
+    }
+
+
+
+
+
+
+
+
+    //grain to zero             Swift Grain accordingly 4/11
+    else if (pcon == 2) {
+      if (am_mode == 3) {
+        return;
+      }
+      if (ongoingfacet == 0) {
+        am_mode = 3;
+        Serial.println("------------------------------------------");
+        Serial.println("");
+        Serial.println("!!!!!!!!! First set Initial facet to 1 !!!!!!!!!!!!");
+        return;
+      }
+      Serial.println("------------------------------------------");
+      Serial.println("");
+      Serial.println("Grain set to zero further to 4/11- ");
+      Serial.print("For Facet - ");
+      Serial.println(ongoingfacet);
+
+      setgrainto(1, 0);
+
+      if (facgrn[ongoingfacet - 1] == 0) {
+        if (facetset == 0 || facetset == 2) {
+          fgrn = 1;
+          stepper2.setSpeed(ssp2);
+          for (int x = 0; x < (252272 * 4); x++) { ////////// rotating 16 degress for each grind
+            stepper2.runSpeed();
+          }
+          temp1 = 4;
+          //setgrainto(4, 0);       //Setting   Grain to 4 for 16 facet
+        }
+
+        if (facetset == 1 || facetset == 3) {
+          //          fgrn = 2;
+          stepper2.setSpeed(-ssp2);
+          for (int x = 0; x < (252272 * 11); x++) { ////////// rotating 16 degress for each grind
+            stepper2.runSpeed();
+          }
+          stepper2.setSpeed(ssp2);
+          temp1 = 11;
+          //setgrainto(11, 0);     //Setting   Grain to 11 for 8 facet
+        }
+      } else {
+        Serial.print("Found Grain at facgrn[ongoingfacet] - ");
+        Serial.print(facgrn[ongoingfacet - 1]);
+        if (facgrn[ongoingfacet - 1] > 23) {
+          facgrn[ongoingfacet - 1] = 0;
+          return;
+        }
+        //setgrainto(facgrn[ongoingfacet], 0);
+        stepper2.setSpeed(ssp2);
+        for (int x = 0; x < (252272 * facgrn[ongoingfacet - 1]); x++) { ////////// rotating 16 degress for each grind
+          stepper2.runSpeed();
+        }
+        temp1 = facgrn[ongoingfacet - 1];
+      }
+      pcon = 3;
+    }
+
+
+
+
+
+    //start dc                    down till first low
+    else if (pcon == 3) {
+      Serial.println("------------------------------------------");
+      Serial.println("");
+      Serial.println("turining on dc motor ");
+      Serial.println("");
+      analogWrite(d4cmotor3, dcms);
+      //////bring lift down till first low///////                                              (diamond first touch down)
+      Serial.println("------------------------------------------");
+      Serial.println("");
+      Serial.println("down till first low ");
+      Serial.println("");
+
+      digitalWrite(dirPin3, HIGH);
+
+      while (digitalRead(liftin) == LOW) {// && start_stop == 1
+        digitalWrite(stepPin3, HIGH);
+        delayMicroseconds(liftfirstdwn);
+        digitalWrite(stepPin3, LOW);
+        delayMicroseconds(liftfirstdwn);
+        cfstdwn++;
+        //        handle_ser++;
+        //        if (handle_ser > thehandle) {
+        server.handleClient();
+        //          handle_ser = 0;
+        //        }
+        if (am_mode == 3) {
+          return;
+        }
+        //
+        //        if ((digitalRead(dyein) == LOW)) {
+        //          liftupmotor();
+        //          pcon = 2;
+        //          am_mode = 0;
+        //        } else {
+        //          //
+        //          Serial.println("low");
+        //        }
+        if (digitalRead(vasindwn) == LOW && digitalRead(vasinup) == LOW) {
+          digitalWrite(failed, LOW);
+          liftupmotor("Vas sense detected during first low");
+          Serial.println("------------------------------------------");
+          Serial.println("");
+          Serial.println("Vas sense detected  during first low");
+          Serial.print("-----------  Facet ");
+          Serial.print(ongoingfacet);
+          Serial.println(" Completed ------------");
+          Serial.println("");
+          server.handleClient();
+
+          fsensegrn[ongoingfacet - 1] = temp1;
+
+          if (am_mode == 0 || am_mode == 1) { // next facet for auto Mode
+            pcon = 1;
+          } else {           // stop for manual Mode
+            pcon = 8;
+          }
+          setgrainto(1, 0);
+          digitalWrite(failed, HIGH);
+          return;
+        }
+        dyeinterruptcheck();
+
+      }
+
+      //      cfstdwn = 0;
+      pcon = 4;
+      sendDataPrevMillis = millis();
+      changefacettimmer = millis();
+      //      Serial.print("grain interval ");
+    }
+
+
+
+
+
+    else if (pcon == 4) {
+
+      dyeinterruptcheck();
+
+      if (digitalRead(liftin) == HIGH ) { //ongoing cutting assumtions
+        if (millis() - sendDataPrevMillis  > grninterval) { //change grain
+          sendDataPrevMillis = millis();
+          //          grninterval = 4000;
+
+          Serial.println("------------------------------------------");
+          Serial.println("");
+          Serial.print("grain interval ");
+          Serial.println(grninterval);
+          Serial.println("");
+          Serial.print("Grain at - ");
+          Serial.print(temp1);
+          Serial.println("");
+          int tleft = (facettimmer - (millis() - changefacettimmer)) / 1000;
+          Serial.print("Facet change in -");
+          Serial.print(tleft);
+          Serial.println(" sec");
+
+
+
+          if (fgrn == 1) { // After finishing first grain at 4 for 16f
+            Serial.println("------------------------------------------");
+            Serial.println("");
+            Serial.print("Moving grain to 1 from 4");//after finising grain at 4 respectively
+            Serial.println("");
+            setgrainto(1, 0);
+            fgrn = 0;
+            return;
+          }
+
+          stepper2.setSpeed(ssp2);
+          for (int x = 0; x < (252272); x++) { ////////// rotating 16/8 degress for each grind
+            stepper2.runSpeed();
+            dyeinterruptcheck();
+          }
+          temp1++;
+          if (temp1 > 22) {
+            temp1 = 1;
+            if (grninterval < 4000) {
+              grninterval = grninterval + grninc;
+            } else {
+              grninterval = 4000;
+            }
+
+            digitalWrite(dirPin3, HIGH);
+            for (int x = 0; x < 2; x++) {
+              //stepper3.runSpeed();
+              digitalWrite(stepPin3, HIGH);
+              delayMicroseconds(liftdwnmicro);
+              dyeinterruptcheck();
+              digitalWrite(stepPin3, LOW);
+              delayMicroseconds(liftdwnmicro);
+              dyeinterruptcheck();
+              bbv++;
+            }
+          }
+        }
+        if (millis() - changefacettimmer  > facettimmer) {
+          changefacettimmer = millis();
+          liftupmotor("NO GRAIN FOUND chainging facet");
+          setgrainto(1, 0);
+          pcon = 1;
+          //Remember and come latter
+          if (facetset == 0 || facetset == 2) {
+            facetmissed++;
+          }
+          facetmiss[facetmissed] = ongoingfacet;
+          fnotc = fnotc + ", " + String(ongoingfacet);
+          return;
+        }
+
+      }
+
+
+      else { //strip low - change grain, if grain revolved 360 then change facet
+        Serial.println("------------------------------------------");
+        Serial.println("");
+        Serial.print("Low strip dected BRINGING DOWN - Grain at- ");
+        Serial.print(temp1);
+        Serial.print(" Facet at -");
+        Serial.print(ongoingfacet);
+        Serial.println("");
+        int tleft = (facettimmer - (millis() - changefacettimmer)) / 1000;
+        Serial.print(" Facet change in -");
+        Serial.print(tleft);
+        Serial.println(" sec");
+        if (bbv % 100 == 0) {
+          server.handleClient();
+        }
+
+        if (bbv > 500) {
+          facgrn[ongoingfacet - 1] = temp1;
+          //              Serial.println("");
+          //              Serial.print("Stored - ");
+          //              Serial.print(ongoingfacet);
+          //              Serial.print("At Cutting Grain - ");
+          //              Serial.println(temp1);
+        }
+        sendDataPrevMillis = millis();
+
+        //        stepper3.setSpeed(-400);
+        //        for (int x = 0; x < 50; x++) {
+        //          stepper3.runSpeed();
+        //          dyeinterruptcheck();
+        //        }
+        digitalWrite(dirPin3, HIGH);
+        for (int x = 0; x < 2; x++) {
+          digitalWrite(stepPin3, HIGH);
+          delayMicroseconds(liftdwnmicro);
+          dyeinterruptcheck();
+          digitalWrite(stepPin3, LOW);
+          delayMicroseconds(liftdwnmicro);
+          dyeinterruptcheck();
+          bbv++;
+        }
+        dyeinterruptcheck();
+      }
+
+
+
+
+      if (facetset == 0 || facetset == 2) {
+        if (digitalRead(vasindwn) == LOW && digitalRead(vasinup) == LOW) {
+          delayMicroseconds(temp22);
+          if (digitalRead(vasindwn) == LOW && digitalRead(vasinup) == LOW) {
+            digitalWrite(failed, LOW);
+            liftupmotor("Vas sense detected");
+            Serial.println("------------------------------------------");
+            Serial.println("");
+            Serial.println("Vas sense detected");
+            Serial.print("-----------  Facet ");
+            Serial.print(ongoingfacet);
+            Serial.println(" Completed ------------");
+            Serial.println("");
+            //          analogWrite(d4cmotor3, 0);
+            server.handleClient();
+            //            Serial.print("bbvs - ");
+            //            bbvs = bbvs + ", " + String(bbv) + "(" + String(ongoingfacet) + ")";
+            //            Serial.println(bbvs);
+            //            bbv = 0;
+            Serial.print("fsensegrn");
+            fsensegrn[ongoingfacet - 1] = temp1;
+            Serial.print("(");
+            Serial.print(ongoingfacet - 1);
+            Serial.print(") - ");
+            Serial.println(temp1);
+            if (am_mode == 0 || am_mode == 1) { // next facet for auto Mode
+              pcon = 1;
+            } else {           // stop for manual Mode
+              pcon = 8;
+            }
+            setgrainto(1, 0);
+            digitalWrite(failed, HIGH);
+          }
+        } else if (digitalRead(vasindwn) == LOW && digitalRead(vasinup) == HIGH) {
+
+        }
+      }
+      if (facetset == 1 || facetset == 3) {
+        if (digitalRead(dyein) == LOW) {
+          digitalWrite(failed, LOW);
+          liftupmotor("Dye sense detected");
+          Serial.println("------------------------------------------");
+          Serial.println("");
+          Serial.println("Dye sense detected");
+          Serial.print("-----------  BHALA ");
+          Serial.print(ongoingfacet);
+          Serial.println(" Completed ------------");
+          Serial.println("");
+          //          analogWrite(d4cmotor3, 0);
+          server.handleClient();
+          //          bbvs = bbvs + ", " + String(bbv) + "(" + String(ongoingfacet) + ")";
+          //          bbv = 0;
+          fsensegrn[ongoingfacet - 1] = temp1;
+          if (am_mode == 0 || am_mode == 1) { // next facet for auto Mode
+            pcon = 1;
+          } else {           // stop for manual Mode
+            pcon = 8;
+          }
+          setgrainto(1, 0);
+          digitalWrite(failed, HIGH);
+        }
+      }
+    }
+  }
+
+  //Manual Mode
+  if (am_mode == 3) {
+    server.handleClient();
+    if (facetwas == 1) {
+      digitalWrite(dirPin, LOW);
+      for (int x = 0; x < 500 ; x++) {        // 12800(22.5) 6400(11.25) = 19,200
+        digitalWrite(stepPin, HIGH);
+        delayMicroseconds(250);
+        digitalWrite(stepPin, LOW);
+        delayMicroseconds(250);
+      }
+    }
+    else if (facetwas == 2) {
+      digitalWrite(dirPin, HIGH);
+      for (int x = 0; x < 500 ; x++) {         // 12800(22.5) 6400(11.25) = 19,200
+        digitalWrite(stepPin, HIGH);
+        delayMicroseconds(250);
+        digitalWrite(stepPin, LOW);
+        delayMicroseconds(250);
+      }
+    }
+  }
+}
+
+
+
+void setfacetto(int facetno, int dir) {
+
+  if (ongoingfacet > 0) {
+    if (facetno == ongoingfacet) {
+      Serial.println("-sftr-");
+      return;
+    }
+    int diff = 0;
+    int stp1 = 0;
+    int stp2 = 0;
+    diff = facetno - ongoingfacet;
+    if (facetset == 0 || facetset == 2) {
+      if (diff > 0) {
+        stp1 = 16 - abs(diff);
+        stp2 =  abs(diff);
+      } else {
+        stp2 = 16 - abs(diff);
+        stp1 =  abs(diff);
+      }
+    }
+    if (facetset == 1 || facetset == 3) {
+      if (diff > 0) {
+        stp1 = 8 - abs(diff);
+        stp2 =  abs(diff);
+      } else {
+        stp2 = 8 - abs(diff);
+        stp1 =  abs(diff);
+      }
+    }
+    Serial.print(F("ongoing facet - "));
+    Serial.println(ongoingfacet);
+    Serial.print(F("facet no- "));
+    Serial.println(facetno);
+    Serial.print(F("diff - "));
+    Serial.println(diff);
+    Serial.print(F("stp1 - "));
+    Serial.println(stp1);
+    Serial.print(F("stp2 - "));
+    Serial.println(stp2);
+
+    if (facetset == 0 || facetset == 2) {
+      if (stp1 < stp2) {
+        Serial.print(stp1);
+        Serial.println(F("(A)-"));
+        Serial.println(F(""));
+        for (int x = 0; x < stp1 ; x++) { // 12800(22.5) 6400(11.25) = 19,200
+          facetmotor(0, 22.5);
+        }
+      } else {
+        Serial.print(stp2);
+        Serial.println(F("  (C)+"));
+        Serial.println(F(""));
+        for (int x = 0; x < stp2 ; x++) { // 12800(22.5) 6400(11.25) = 19,200
+          facetmotor(22.5, 0);
+        }
+        facetmotor(11.25, 0);
+        facetmotor(0, 11.25);
+      }
+    }
+    if (facetset == 1 || facetset == 3) {
+      if (stp1 < stp2) {
+        Serial.print(stp1);
+        Serial.println(F(" -"));
+        Serial.println(F(""));
+        for (int x = 0; x < stp1 ; x++) { // 12800(22.5) 6400(11.25) = 19,200
+           facetmotor(45, 0);
+        }
+      } else {
+        Serial.print(stp2);
+        Serial.println(F(" +"));
+        Serial.println(F(""));
+        for (int x = 0; x < stp2 ; x++) { // 12800(22.5) 6400(11.25) = 19,200
+           facetmotor(0, 45);
+        }
+        facetmotor(11.25, 0);
+        facetmotor(0, 11.25);
+      }
+    }
+    ongoingfacet = facetno;
+  }
+}
+
+void setgrainto(int grainno, int dir) {
+  if (grainno == 1) { //GRAIN TO ZERO
+    if (temp1 < 11) {
+      stepper2.setSpeed(-ssp2);
+      while (digitalRead(grainmeg) == HIGH ) {//&& start_stop == 1
+        stepper2.runSpeed();
+      }
+      //      for (int x = 0; x < 252272; x++) {
+      //        stepper2.runSpeed();
+      //      }
+    }
+    else {
+      stepper2.setSpeed(ssp2);
+      while (digitalRead(grainmeg) == HIGH ) {//&& start_stop == 1
+        stepper2.runSpeed();
+      }
+      for (int x = 0; x < 252272; x++) {
+        stepper2.runSpeed();
+      }
+    }
+    temp1 = 1;
+    Serial.print(F("-- Grain Homed : "));
+    //    Serial.print(logp);
+    Serial.println(F(" --"));
+  } else {
+    int diff = 0;
+    int stp1 = 0;
+    int stp2 = 0;
+    diff = grainno - temp1;
+    stp1 = 22 - abs(diff);
+    stp2 = abs(diff);
+    //    Serial.print(F("grainnno - "));
+    //    Serial.println(grainno);
+    //    Serial.print(F("temp1 - "));
+    //    Serial.println(temp1);
+    //    Serial.print(F("diff - "));
+    //    Serial.println(diff);
+    //    Serial.print(F("stp1 - "));
+    //    Serial.println(stp1);
+    //    Serial.print(F("stp2 - "));
+    //    Serial.println(stp2);
+
+    if (dir == 0) {
+      stepper2.setSpeed(-ssp2);
+      for (int x = 0; x < (252272 * stp1); x++) { ////////// rotating 16 degress for each grind
+        stepper2.runSpeed();
+      }
+      stepper2.setSpeed(ssp2);
+    }  else {
+      stepper2.setSpeed(ssp2);
+      for (int x = 0; x < (252272 * stp2); x++) { ////////// rotating 16 degress for each grind
+        stepper2.runSpeed();
+      }
+      stepper2.setSpeed(ssp2);
+    }
+    temp1 = grainno;
+  }
+}
+
+void resetparameters() {
+  Serial.print(F("-- parameters reseted: "));
+  grninterval = 3000;
+  facetmissed = 0;
+  for (int i = 0; i < 16; i = i + 1) {
+    facgrn[i] = 0;
+    facetmiss[i] = 0;
+    fsensegrn[i] = 0;
+  }
+  fgrn = 0;
+  bbv = 0;
+  cfstdwn = 0;
+  pcon = 2;
+
+  Serial.print(thehandle);
+  Serial.println(F(" --"));
+}
+
+void liftupmotor(String logp) {
+
+  //  stepper3.setSpeed(25000);
+  //  for (int x = 0; x < 765000; x++) {
+  //    stepper3.runSpeed();
+  //  }
+  if ((cfstdwn + bbv) < 1) {//default
+    digitalWrite(dirPin3, LOW);
+    for (int x = 0; x < 500; x++) {
+      digitalWrite(stepPin3, HIGH);
+      delayMicroseconds(liftupm);
+      digitalWrite(stepPin3, LOW);
+      delayMicroseconds(liftupm);
+    }
+  } else {
+    digitalWrite(dirPin3, LOW);
+    for (int x = 0; x < (cfstdwn + bbv); x++) {
+      if (x % 100 == 0) {
+        if (liftupm > liftupmin) {
+          liftupm = liftupm - 1;
+        }
+      }
+      digitalWrite(stepPin3, HIGH);
+      delayMicroseconds(liftupm);
+      digitalWrite(stepPin3, LOW);
+      delayMicroseconds(liftupm);
+    }
+  }
+
+  Serial.print(F("-- Motor Lifed : "));
+  Serial.print(logp);
+  Serial.print(", ");
+  Serial.print((cfstdwn + bbv));
+  Serial.println(F(" --"));
+  totaldwntrk = totaldwntrk + ", " + String(cfstdwn + bbv) + "(Facet - " + ongoingfacet + ")";
+  cfstdwns = cfstdwns + ", " + String(cfstdwn) + "(Facet -" + ongoingfacet + ")";
+  cfstdwn = 0;
+  bbvs = bbvs + ", " + String(bbv) + "(Facet -" + String(ongoingfacet) + ")";
+  bbv = 0;
+
+  //  stepper3.setSpeed(20000);
+  //  for (int x = 0; x < 365000; x++) {
+  //    stepper3.runSpeed();
+  //  }
+}
+void facetclk() {
+  if (facetset == 0 || facetset == 2) {
+    facetmotor(22.5, 0);
+    ongoingfacet--;
+    if (ongoingfacet < 1) {
+      ongoingfacet = 16;
+    }
+
+    server.send(200, "text/plain", "facet - -> " + String(ongoingfacet));
+    Serial.println("facet - -> " + String(ongoingfacet));
+  }
+
+  if (facetset == 1 || facetset == 3) {
+    facetmotor(45, 0);
+    ongoingfacet--;
+    if (ongoingfacet < 1) {
+      ongoingfacet = 8;
+    }
+
+    server.send(200, "text/plain", "bhala - -> " + String(ongoingfacet));
+    Serial.println("bhala - -> " + String(ongoingfacet));
+  }
+}
+
+
+
+void facetanticlk() {
+  if (facetset == 0 || facetset == 2) {
+    facetmotor(22.5, 11.25);
+    ongoingfacet++;
+    if (ongoingfacet > 16) {
+      ongoingfacet = 1;
+    }
+    server.send(200, "text/plain", "facet + -> " + String(ongoingfacet));
+    Serial.println("facet + -> " + String(ongoingfacet));
+  }
+  if (facetset == 1 || facetset == 3) {
+    facetmotor(45, 11.25);
+    ongoingfacet++;
+    if (ongoingfacet > 8) {
+      ongoingfacet = 1;
+    }
+    server.send(200, "text/plain", "bhala + -> " + String(ongoingfacet));
+    Serial.println("bhala + -> " + String(ongoingfacet));
+  }
+
+}
+
+
+void facetclkwas() {
+  facetwas = 2;
+  server.send(200, "text/plain", "facetwas -");
+}
+
+void facetanticlkwas() {
+  facetwas = 1;
+  server.send(200, "text/plain", "facetwas +");
+}
+
+void facetwasstop() {
+  if (facetwas == 1) {
+    digitalWrite(dirPin, HIGH);
+    for (int x = 0; x < 1000 ; x++) {// 12800(22.5) 6400(11.25) = 19,200
+      digitalWrite(stepPin, HIGH);
+      delayMicroseconds(300);
+      digitalWrite(stepPin, LOW);
+      delayMicroseconds(300);
+    }
+  } else if (facetwas == 2) {
+    //
+
+
+  }
+  facetwas = 0;
+  server.send(200, "text/plain", "facetwas stoped at facet - " + String(ongoingfacet));
+  Serial.println("facetwas stoped at facet --> " + String(ongoingfacet));
+}
+
+void grainclk() {
+  stepper2.setSpeed(ssp2);
+  for (int x = 0; x < 252272; x++) {////////// rotating 16 degress for each grain
+    stepper2.runSpeed();
+  }
+  server.send(200, "text/plain", "Grain +");
+}
+
+void grainanticlk() {
+  stepper2.setSpeed(-ssp2);
+  for (int x = 0; x < 252272; x++) {////////// rotating 16 degress for each grain
+    stepper2.runSpeed();
+  }
+  stepper2.setSpeed(ssp2);
+  server.send(200, "text/plain", "Grain -");
+}
+
+void liftup() {
+  //  stepper3.setSpeed(ssp3);
+  //  for (int x = 0; x < 165000; x++) {
+  //    stepper3.runSpeed();
+  //  }
+  digitalWrite(dirPin3, LOW);
+  for (int x = 0; x < 3000; x++) {
+    digitalWrite(stepPin3, HIGH);
+    delayMicroseconds(liftupm);
+    digitalWrite(stepPin3, LOW);
+    delayMicroseconds(liftupm);
+  }
+  server.send(200, "text/plain", "Lift ^");
+}
+void liftdown() {
+  //  stepper3.setSpeed(-(ssp3 - 2000));
+  //  for (int x = 0; x < 165000; x++) {
+  //    stepper3.runSpeed();
+  //  }
+  //  stepper3.setSpeed(ssp3);
+
+  digitalWrite(dirPin3, HIGH);
+  for (int x = 0; x < 3000; x++) {
+    digitalWrite(stepPin3, HIGH);
+    delayMicroseconds(liftupm);
+    digitalWrite(stepPin3, LOW);
+    delayMicroseconds(liftupm);
+  }
+
+  server.send(200, "text/plain", "Lift v");
+}
+
+void handleRoot() {
+  server.send(200, "text/plain", "hello from esp32!");
+}
+
+
+void handleserverlinks() {
+  server.on("/", handleRoot);
+  server.on("/facetclk", facetclk);
+  server.on("/facetanticlk", facetanticlk);
+  server.on("/facetclkwas", facetclkwas);
+  server.on("/facetanticlkwas", facetanticlkwas);
+  server.on("/facetwasstop", facetwasstop);
+  server.on("/grainclk", grainclk);
+  server.on("/grainanticlk", grainanticlk);
+  server.on("/liftup", liftup);
+  server.on("/liftdown", liftdown);
+
+  server.on("/spur", []() {                     //Format - http://192.168.4.1/spur?spur=ssid-pass-
+    String spur = server.arg("spur");
+    int j = 0;
+    while (spur.charAt(j) != '-')
+      j++;
+
+    String ssidr = spur.substring(0, j);
+    Serial.print(F("Var-"));
+    Serial.println(ssidr);
+    int k = j + 1;
+    while (spur.charAt(k) != '-')
+      k++;
+
+    String passw = spur.substring(j + 1, k);
+    Serial.print("data-");
+    Serial.println(passw);
+
+    if (ssidr == "dcms") {
+      dcms = passw.toInt();
+      Serial.print(F("dcms"));
+      Serial.print(F("->"));
+      Serial.println(dcms);
+
+      server.send(200, "text/plain", "dcms -" + String(dcms));
+      analogWrite(d4cmotor3, dcms);
+      //      server.send(200, "text/plain", "dcms -" + String(dcms));
+    }  if (ssidr == "am_mode") {
+      am_mode = passw.toInt();
+      Serial.print(F("am_mode"));
+      Serial.print(F("->"));
+      Serial.println(am_mode);
+      if (am_mode == 1) {
+        if (facetset == 0 || facetset == 2) {
+          //          if(
+          facetmotor(22.5, 11.25);
+          ongoingfacet++;
+          Serial.println(F("Shifting To Auto Mode for 16 facet"));
+          server.send(200, "text/plain", "Shifting To Auto Mode for 16 facet");
+        }
+        if (facetset == 1 || facetset == 3) {
+          facetmotor(45, 11.25);
+          ongoingfacet++;
+          Serial.println(F("Shifting To Auto Mode for bhala"));
+          server.send(200, "text/plain", "Shifting To Auto Mode for bhala");
+        }
+        pcon = 2;
+      } else {
+        server.send(200, "text/plain", "Shifting To Manual Mode");
+      }
+    }  if (ssidr == "facetset") {
+      facetset = passw.toInt();
+      Serial.print(F("facetset"));
+      Serial.print(F("->"));
+      if (facetset == 0) {
+        thehandle = 50000;
+        Serial.println("16 Facet Mode");
+        ongoingfacet = 1;
+        facetmotor(11.25, 0);
+        server.send(200, "text/plain", "facetset - 16 Facet Mode");
+      } else if (facetset == 1) {
+        ongoingfacet = 1;
+        facetmotor(11.25, 11.25);
+        thehandle = 50000;
+        Serial.println("8 Facet Mode");
+        server.send(200, "text/plain", "facetset - 8 Bhala Mode");
+      }
+
+      resetparameters();
+    }  if (ssidr == "grninterval") {
+      grninterval = passw.toInt();
+      Serial.print(F("grninterval"));
+      Serial.print(F("->"));
+      Serial.println(grninterval);
+      server.send(200, "text/plain", "grninterval -" + String(grninterval));
+    } else if (ssidr == "hsdelay") {
+      temp22 = passw.toInt();
+      server.send(200, "text/plain", "msdelay set to- " + String(temp22));
+    } else if (ssidr == "start_stop") {
+      start_stop = passw.toInt();
+      Serial.print(F("start_stop"));
+      Serial.print(F("->"));
+      Serial.println(start_stop);
+      Serial.print(F("am_mode"));
+      Serial.print(F("->"));
+      Serial.println(am_mode);
+      if (start_stop == 0) {
+        if (am_mode == 0) {
+          if (pcon != 1 && pcon != 8) {
+            am_mode = 3;
+            pcon = 2;
+            liftupmotor("server Machine stoped");
+            analogWrite(d4cmotor3, 0);
+            setgrainto(1, 0);
+            server.send(200, "text/plain", "Machine stoped");
+            return;
+          }
+        }
+        if (am_mode == 1) {
+          am_mode = 3;
+          pcon = 2;
+          liftupmotor("server Machine stoped");
+          analogWrite(d4cmotor3, 0);
+          setgrainto(1, 0);
+          server.send(200, "text/plain", "Machine stoped");
+          return;
+        }
+      } else {
+        if (digitalRead(vasindwn) == HIGH) {
+          am_mode = 0;
+          pcon = 2;
+          Serial.println("---------------------- !!!!!! --------------------");
+          Serial.println("");
+          Serial.println("");
+          if (facetset == 0 || facetset == 2) {
+            Serial.println("Starting in 16 Facet Mode");
+          } else if (facetset == 1 || facetset == 3) {
+            Serial.println("Starting in 8 Bhala Mode");
+          }
+          Serial.println("");
+          Serial.println("");
+          Serial.println("---------------------- !!!!!! --------------------");
+        } else { //errror
+          for (int x = 0; x < 5 ; x++) {
+            digitalWrite(failed, LOW);
+            delay(400);
+            digitalWrite(failed, HIGH);
+            delay(400);
+          }
+          server.send(200, "text/plain", "Kindly put vas cover");
+          Serial.println(F("Kindly put vas cover"));
+          return;
+        }
+      }
+    }  if (ssidr == "weight") {
+      int weightmul = passw.toInt();
+      setweightto(weightmul);
+      server.send(200, "text/plain", "weight ^ to " + String(weightmul));
+    }  if (ssidr == "bbv") {
+      bbvthres = passw.toInt();
+      server.send(200, "text/plain", "bbvthres set to- " + String(bbvthres));
+    }  if (ssidr == "setfacet") {
+      int setfacet = passw.toInt();
+      if (setfacet == 0) {// set 16 facet to 1 after 1.5 rotation(clicking wass)
+        facetmotor(33.75, 0);
+        ongoingfacet = 1;
+        server.send(200, "text/plain", "facet set to 1");
+      }  if (setfacet > 0 && setfacet < 17) { //Goto given facet
+        if (ongoingfacet > 0) {
+          setfacetto(setfacet, 0);
+          server.send(200, "text/plain", "facet set to -" + String(setfacet));
+        } else {
+          server.send(200, "text/plain", "First set initial Facet");
+        }
+      }  if (setfacet == 20) {  //set current facet/bhala to 1
+        ongoingfacet = 1;
+        server.send(200, "text/plain", "Current facet overrided to 1");
+      }
+      if (setfacet == 30) { // set to bhala mode after facet mode to 1 after 11.25 rotation
+
+
+        server.send(200, "text/plain", "Current bhala set to 1");
+      }
+      if (setfacet == 40) { // set to facet mode after bhala mode to 1 after 11.25 rotation in reverse
+
+        server.send(200, "text/plain", "Current bhala set to 1");
+      }
+    }
+
+  });
+}
+void dyeinterruptcheck() {
+  if (facetset == 1 || facetset == 3) { //INTERRUPT CHECK
+    if (fdone == 1) {
+      //      Serial.println("qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq");
+      //      Serial.println("");
+      if (digitalRead(dyein) == LOW) {
+        fdone = 0;
+        digitalWrite(failed, LOW);
+        liftupmotor("Dye sense detected from intrupt");
+        Serial.println("------------------------------------------");
+        Serial.println("");
+        Serial.println("Dye sense detected from intrupt");
+        Serial.print("-----------  BHALA ");
+        Serial.print(ongoingfacet);
+        Serial.println(" Completed ------------");
+        Serial.println("");
+        //        analogWrite(d4cmotor3, 0);
+        server.handleClient();
+        fsensegrn[ongoingfacet - 1] = temp1;
+        //        bbvs = bbvs + ", " + String(bbv) + "(" + String(ongoingfacet) + ")";
+        //        bbv = 0;
+        if (am_mode == 0 || am_mode == 1) { // next facet for auto Mode
+          pcon = 1;
+        } else {           // stop for manual Mode
+          pcon = 8;
+        }
+        setgrainto(1, 0);
+        digitalWrite(failed, HIGH);
+        return;
+      }
+    }
+  }
+}
+void printanalitics() {// add time tooked , guss estimated time
+  Serial.println("------------------------------------------");
+  Serial.println("");
+  Serial.println("  -------------- Analitics --------------  ");
+  Serial.println("");
+  Serial.println("");
+  Serial.print("cfstdwns - ");
+  Serial.println(cfstdwns);
+  cfstdwns = "";
+  Serial.print("bbvs - ");
+  Serial.println(bbvs);
+  bbvs = "";
+  Serial.print("totaldwntrk - ");
+  Serial.println(totaldwntrk);
+  totaldwntrk = "";
+  Serial.print("facgrn - ");//bbvs = bbvs+", "+bbv+"("+ongoingfacet+")";
+  for (int i1 = 0; i1 < 16; i1++) {
+    Serial.print(facgrn[i1]);
+    Serial.print("(");
+    Serial.print(i1);
+    Serial.print("), ");
+    //    facgrn[i] = 0;
+    //    facetmiss[i] = 0;
+  }
+  Serial.println("");
+  Serial.print("fsensegrn - ");//bbvs = bbvs+", "+bbv+"("+ongoingfacet+")";
+  for (int i2 = 0; i2 < 16; i2++) {
+    Serial.print(fsensegrn[i2]);
+    Serial.print("(");
+    Serial.print(i2);
+    Serial.print("), ");
+    //    facgrn[i] = 0;
+    //    facetmiss[i] = 0;
+  }
+  Serial.print("");
+  Serial.println("");
+  Serial.print("");
+  Serial.println("");
+  Serial.println("------------------------------------------");
+}
+void setweightto(int wei) {
+  //0-1700 - 0-19200(180degree)(100 interval)
+  if (wei > 1700) {
+    wei = 1700;
+  }
+  digitalWrite(dirPin4, HIGH);
+  while (digitalRead(weightmeg) == HIGH ) {
+    digitalWrite(stepPin4, HIGH);
+    delayMicroseconds(60);
+    digitalWrite(stepPin4, LOW);
+    delayMicroseconds(60);
+  }
+  digitalWrite(dirPin4, LOW);
+  for (int i = 0; i < (11 * wei); i++) {
+    digitalWrite(stepPin4, HIGH);
+    delayMicroseconds(60);
+    digitalWrite(stepPin4, LOW);
+    delayMicroseconds(60);
+  }
+}
