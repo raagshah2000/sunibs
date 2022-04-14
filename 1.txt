@@ -1,6 +1,8 @@
 /*
-  Currently in Testing-updated version of v2_app_v8 -
-  custom grain motor
+  Currently in Testing-updated version of v2_app_v9 -
+  adc sense test
+  +1  grain in bhala(x)
+  dc off at dye sense(x)<-CHECK
 
 
 */
@@ -18,7 +20,7 @@
 #include "handle_server.h"
 #include "facetmotorcontrol.h"
 
-const char* ssid = "A U T O - D P";
+const char* ssid = "A U T O - D P 2";
 const char* password = "";
 
 WebServer server(80);
@@ -28,8 +30,8 @@ WebServer server(80);
 //const int stepPin = 13;//fecet 350 6400(fullstep_fullresolution)
 //const int dirPin = 12;
 
-const int stepPin2 = 33;//grain 5000 1200(fullstep_fullresolution) 38400,70-80(32 Microstep)
-const int dirPin2 = 32;
+const int stepPin2 = 26;//grain 5000 1200(fullstep_fullresolution) 38400,70-80(32 Microstep)
+const int dirPin2 = 25;
 const int spg = 1745;
 
 const int stepPin3 = 2;//lift-off 1000
@@ -57,7 +59,7 @@ int start_stop = 0;
 
 /////////////////////////////lift motor variables
 int liftdwnmicro = 1000;
-int liftfirstdwn = 200;
+int liftfirstdwn = 80;
 int liftupm = 50;
 int liftupmin = 20;
 String totaldwntrk = "";
@@ -73,8 +75,9 @@ int liftin = 19;
 int weightmeg = 21;
 int grainmeg = 16;
 int dyein = 17;
-int vasindwn = 26;
-int vasinup = 25;
+int vasindwn = 33;
+int vasinup = 32;
+int asthresh = 2000;
 int carbondisk = 27;
 
 //int facet = 16;
@@ -207,7 +210,7 @@ void loop() {
     ///Facet change
     if (pcon == 1) {
 
-//      grninterval = 3000;
+      //      grninterval = 3000;
 
       if (am_mode == 0) {                   //Pause if manual mode
         am_mode = 3;
@@ -223,7 +226,7 @@ void loop() {
 
 
 
-      if (facetset == 0) {   /// first 16r mode
+      if (facetset == 0) {
         //        setfacetto(ongoingfacet + 1, 0);
         facetmotor(22.5, 11.25);
         ongoingfacet++;
@@ -254,7 +257,7 @@ void loop() {
             Serial.println("------------------------------------------");
           }
         }
-      } if (facetset == 1) { // for first 8 facet
+      } if (facetset == 1) { // for 8 facet
         facetmotor(45, 11.25);
         ongoingfacet++;
         if (ongoingfacet > 8) {
@@ -295,11 +298,10 @@ void loop() {
           Serial.println("am - 3 (4)");
           //          liftupmotor("16 Facet Completed");
           analogWrite(d4cmotor3, 0);
-
+          facetset = 0;
           setgrainto(1, 0);
           setfacetto(1, 0);
           ongoingfacet = 1;
-          facetset = 0;
           pcon = 8; //process finished
           printanalitics();
           Serial.println("------------------------------------------");
@@ -320,10 +322,10 @@ void loop() {
           Serial.println("am - 3 (5)");
           //          liftupmotor("8 Facet Completed");
           analogWrite(d4cmotor3, 0);
+          facetset = 1;
           setgrainto(1, 0);
           setfacetto(1, 0);
           ongoingfacet = 1;
-          facetset = 1;
           pcon = 8; //process finished
           printanalitics();
           Serial.println("------------------------------------------");
@@ -362,7 +364,7 @@ void loop() {
       Serial.print("For Facet - ");
       Serial.println(ongoingfacet);
 
-      setgrainto(1, 0);
+      //      setgrainto(1, 0);
 
       if (facgrn[ongoingfacet - 1] == 0) {
         if (facetset == 0 || facetset == 2) {
@@ -419,30 +421,45 @@ void loop() {
           Serial.println("am - 3 (6)");
           return;
         }
+        //        if ((analogRead(vasindwn) <= asthresh + || analogRead(vasinup) <= asthresh) {
+        //        Serial.print("Analog Values dwn - ");
+        //          Serial.println(analogRead(vasindwn));
+        //          Serial.print("Analog Values up - ");
+        //          Serial.println(analogRead(vasinup));
+        //          Serial.println("");
+        //        }
 
         if (facetset == 0 || facetset == 2) {
-          if (digitalRead(vasindwn) == LOW && digitalRead(vasinup) == LOW) {
-            digitalWrite(failed, LOW);
-            liftupmotor("Vas sense detected during first low");
-            Serial.println("------------------------------------------");
-            Serial.println("");
-            Serial.println("Vas sense detected  during first low");
-            Serial.print("-----------  Facet ");
-            Serial.print(ongoingfacet);
-            Serial.println(" Completed ------------");
-            Serial.println("");
-            server.handleClient();
+          if (analogRead(vasindwn) <= asthresh || analogRead(vasinup) <= asthresh) {
+            delayMicroseconds(temp22);
+            if (analogRead(vasindwn) <= asthresh || analogRead(vasinup) <= asthresh) {
+              Serial.print("Analog Values dwn - ");
+              Serial.println(analogRead(vasindwn));
+              Serial.print("Analog Values up - ");
+              Serial.println(analogRead(vasinup));
+              Serial.println("");
+              digitalWrite(failed, LOW);
+              liftupmotor("Vas sense detected during first low");
+              Serial.println("------------------------------------------");
+              Serial.println("");
+              Serial.println("Vas sense detected  during first low");
+              Serial.print("-----------  Facet ");
+              Serial.print(ongoingfacet);
+              Serial.println(" Completed ------------");
+              Serial.println("");
+              server.handleClient();
 
-            fsensegrn[ongoingfacet - 1] = temp1;
+              fsensegrn[ongoingfacet - 1] = temp1;
 
-            if (am_mode == 0 || am_mode == 1) { // next facet for auto Mode
-              pcon = 1;
-            } else {           // stop for manual Mode
-              pcon = 8;
+              if (am_mode == 0 || am_mode == 1) { // next facet for auto Mode
+                pcon = 1;
+              } else {           // stop for manual Mode
+                pcon = 8;
+              }
+              setgrainto(1, 0);
+              digitalWrite(failed, HIGH);
+              return;
             }
-            setgrainto(1, 0);
-            digitalWrite(failed, HIGH);
-            return;
           }
         }
         dyeinterruptcheck();
@@ -574,11 +591,16 @@ void loop() {
         Serial.print(F(", "));
         Serial.print(ongoingfacet);
         Serial.println(F(""));
+        Serial.print("Analog Values dwn - ");
+        Serial.println(analogRead(vasindwn));
+        Serial.print("Analog Values up - ");
+        Serial.println(analogRead(vasinup));
+        Serial.println("");
         int tleft = (facettimmer - (millis() - changefacettimmer)) / 1000;
         Serial.print(F(" T.L -"));
         Serial.print(tleft);
         Serial.println(F(" s"));
-        if (bbv % 1000 == 0) {
+        if (bbv % 100 == 0) {
           server.handleClient();
         }
 
@@ -603,9 +625,9 @@ void loop() {
 
 
       if (facetset == 0 || facetset == 2) {
-        if (digitalRead(vasindwn) == LOW && digitalRead(vasinup) == LOW) {
+        if (analogRead(vasindwn) <= asthresh || analogRead(vasinup) <= asthresh) {
           delayMicroseconds(temp22);
-          if (digitalRead(vasindwn) == LOW && digitalRead(vasinup) == LOW) {
+          if (analogRead(vasindwn) <= asthresh || analogRead(vasinup) <= asthresh) {
             digitalWrite(failed, LOW);
             liftupmotor("Vas sense detected");
             Serial.println("------------------------------------------");
@@ -628,11 +650,9 @@ void loop() {
             } else {           // stop for manual Mode
               pcon = 8;
             }
-            setgrainto(1, 0);
+            //            setgrainto(1, 0);
             digitalWrite(failed, HIGH);
           }
-        } else if (digitalRead(vasindwn) == LOW && digitalRead(vasinup) == HIGH) {
-
         }
       }
       if (facetset == 1 || facetset == 3) {
@@ -654,7 +674,7 @@ void loop() {
           } else {           // stop for manual Mode
             pcon = 8;
           }
-          setgrainto(1, 0);
+          //          setgrainto(1, 0);
           digitalWrite(failed, HIGH);
         }
       }
@@ -766,7 +786,6 @@ void setfacetto(int facetno, int dir) {
   }
 }
 
-
 void setgrainto(int grainno, int dir) {
   if (grainno == temp1) {
     Serial.println("-sgtr-");
@@ -863,6 +882,7 @@ void setgrainto(int grainno, int dir) {
     temp1 = grainno;
   }
 }
+
 void resetparameters() {
   Serial.print(F("-- parameters reseted: "));
   grninterval = 3000;
@@ -1060,7 +1080,7 @@ void dyeinterruptcheck() {
         } else {           // stop for manual Mode
           pcon = 8;
         }
-        setgrainto(1, 0);
+        //        setgrainto(1, 0);
         digitalWrite(failed, HIGH);
         return;
       }
@@ -1113,7 +1133,7 @@ void setweightto(int wei) {
   if (wei > 1700) {
     wei = 1700;
   }
-  digitalWrite(dirPin4, HIGH);
+  digitalWrite(dirPin4, LOW);
   while (digitalRead(weightmeg) == HIGH ) {
     digitalWrite(stepPin4, HIGH);
     delayMicroseconds(60);
@@ -1220,12 +1240,12 @@ void handleserverlinks() {
     Serial.println(passw);
 
     if (ssidr == "dcms") {
-      dcms = passw.toInt();
-      Serial.print(F("dcms"));
+      asthresh = passw.toInt();
+      Serial.print(F("asthresh"));
       Serial.print(F("->"));
-      Serial.println(dcms);
-      server.send(200, "text/plain", "dcms -" + String(dcms));
-      analogWrite(d4cmotor3, dcms);
+      Serial.println(asthresh);
+      server.send(200, "text/plain", "dcms -" + String(asthresh));
+      //      analogWrite(d4cmotor3, dcms);
       //      server.send(200, "text/plain", "dcms -" + String(dcms));
     }  if (ssidr == "am_mode") {
       am_mode = passw.toInt();
@@ -1308,32 +1328,33 @@ void handleserverlinks() {
           return;
         }
       } else {
-        if (digitalRead(vasindwn) == HIGH) {
-          am_mode = 0;
-          Serial.println("am - 0 (1)");
-          pcon = 2;
-          Serial.println("---------------------- !!!!!! --------------------");
-          Serial.println("");
-          Serial.println("");
-          if (facetset == 0 || facetset == 2) {
-            Serial.println("Starting in 16 Facet Mode");
-          } else if (facetset == 1 || facetset == 3) {
-            Serial.println("Starting in 8 Bhala Mode");
-          }
-          Serial.println("");
-          Serial.println("");
-          Serial.println("---------------------- !!!!!! --------------------");
-        } else { //errror
-          for (int x = 0; x < 5 ; x++) {
-            digitalWrite(failed, LOW);
-            delay(400);
-            digitalWrite(failed, HIGH);
-            delay(400);
-          }
-          server.send(200, "text/plain", "Kindly put vas cover");
-          Serial.println(F("Kindly put vas cover"));
-          return;
+        //        if (digitalRead(vasindwn) == HIGH) {
+        am_mode = 0;
+        Serial.println("am - 0 (1)");
+        pcon = 2;
+        Serial.println("---------------------- !!!!!! --------------------");
+        Serial.println("");
+        Serial.println("");
+        if (facetset == 0 || facetset == 2) {
+          Serial.println("Starting in 16 Facet Mode");
+        } else if (facetset == 1 || facetset == 3) {
+          Serial.println("Starting in 8 Bhala Mode");
         }
+        Serial.println("");
+        Serial.println("");
+        Serial.println("---------------------- !!!!!! --------------------");
+        //        }
+        //        else { //errror
+        //          for (int x = 0; x < 5 ; x++) {
+        //            digitalWrite(failed, LOW);
+        //            delay(400);
+        //            digitalWrite(failed, HIGH);
+        //            delay(400);
+        //          }
+        //          server.send(200, "text/plain", "Kindly put vas cover");
+        //          Serial.println(F("Kindly put vas cover"));
+        //          return;
+        //        }
       }
     }  if (ssidr == "weight") {
       int weightmul = passw.toInt();
